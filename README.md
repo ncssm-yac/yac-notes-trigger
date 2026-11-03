@@ -18,6 +18,8 @@ A small Google Apps Script that starts Yakkety's **Meeting notes to tasks (per f
 6. Optionally run `testDispatch` to prove the token works (starts one harmless exec run).
 7. Set `DRY_RUN` to `false` to go live.
 
+If `checkNotes` fails with HTTP 403 from Drive, the Drive API isn't enabled for the script's Cloud project: in the editor click **Services (+)**, add **Drive API** (v3), and run again. The manifest in `src/appsscript.json` already includes it. The log shows Google's reason.
+
 ## Scopes
 
 `drive.metadata.readonly` (list file names and IDs), `script.external_request` (Drive REST + GitHub), `script.scriptapp` (create the trigger). No scope can read or change a document's contents.
