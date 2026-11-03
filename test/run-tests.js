@@ -1,0 +1,123 @@
+// Runs the Apps Script code in Node with stubbed Google services. No dependencies.
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const assert = require('assert');
+
+const code = fs.readFileSync(path.join(__dirname, '..', 'src', 'Code.gs'), 'utf8');
+
+function world({ props = {}, drive = {}, githubStatus = 204 } = {}) {
+  const logs = [], fetches = [];
+  const store = Object.assign({}, props);
+  const ctx = vm.createContext({
+    console,
+    Logger: { log: (m) => logs.push(m) },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    ScriptApp: { getOAuthToken: () => 'oauth-token' },
+    PropertiesService: { getScriptProperties: () => ({
+      getProperty: (k) => (k in store ? store[k] : null),
+      setProperty: (k, v) => { store[k] = v; }
+    }) },
+    UrlFetchApp: { fetch: (url, opts) => {
+      fetches.push({ url, opts });
+      if (url.startsWith('https://api.github.com/')) return { getResponseCode: () => githubStatus, getContentText: () => '' };
+      const folder = Object.keys(drive).find((id) => url.includes(encodeURIComponent("'" + id + "'")));
+      if (!folder) return { getResponseCode: () => 404, getContentText: () => '' };
+      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ files: drive[folder] }) };
+    } }
+  });
+  vm.runInContext(code, ctx, { filename: 'Code.gs' });
+  return { ctx, logs, fetches, store };
+}
+
+const EXEC = '1ncmPKzuyvnPR4Ie7AbclhLjrXT3Yne0w';
+const LEAD = '1RmXQQsILEHGsZGvTmz1ZKgNc843Nz-Gz';
+const f = (id, n) => ({ id, name: 'YAC Exec - ' + n + ' - Notes by Gemini' });
+const dispatches = (w) => w.fetches.filter((x) => x.url.startsWith('https://api.github.com/'));
+
+let passed = 0;
+function test(name, fn) { fn(); passed++; console.log('ok - ' + name); }
+
+test('first run remembers existing notes and dispatches nothing', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't' }, drive: { [EXEC]: [f('a', '1')], [LEAD]: [] } });
+  w.ctx.checkNotes();
+  assert.strictEqual(dispatches(w).length, 0);
+  assert.deepStrictEqual(JSON.parse(w.store.SEEN_exec), ['a']);
+  assert.deepStrictEqual(JSON.parse(w.store.SEEN_leadership), []);
+});
+
+test('a new notes Doc dispatches that series live, once', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '["a"]', SEEN_leadership: '[]' },
+    drive: { [EXEC]: [f('b', '2'), f('a', '1')], [LEAD]: [] } });
+  w.ctx.checkNotes();
+  const d = dispatches(w);
+  assert.strictEqual(d.length, 1);
+  assert.ok(d[0].url.endsWith('/repos/ncssm-yac/yakkety/actions/workflows/meeting-notes-to-tasks.yml/dispatches'));
+  assert.deepStrictEqual(JSON.parse(d[0].opts.payload), { ref: 'main', inputs: { mode: 'live', series: 'exec' } });
+  assert.strictEqual(d[0].opts.headers.Authorization, 'Bearer t');
+  assert.deepStrictEqual(JSON.parse(w.store.SEEN_exec), ['b', 'a']);
+  w.ctx.checkNotes(); // nothing new now
+  assert.strictEqual(dispatches(w).length, 1);
+});
+
+test('several new files in one series still make one dispatch', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' },
+    drive: { [EXEC]: [f('c', '3'), f('b', '2')], [LEAD]: [] } });
+  w.ctx.checkNotes();
+  assert.strictEqual(dispatches(w).length, 1);
+});
+
+test('payload carries only the series name, no file names or IDs', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' },
+    drive: { [EXEC]: [f('secret-id', 'Private Topic')], [LEAD]: [] } });
+  w.ctx.checkNotes();
+  const p = dispatches(w)[0].opts.payload;
+  assert.ok(!p.includes('secret-id') && !p.includes('Private'));
+});
+
+test('a failed dispatch is retried next run and the run throws', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' },
+    drive: { [EXEC]: [f('b', '2')], [LEAD]: [] }, githubStatus: 401 });
+  assert.throws(() => w.ctx.checkNotes(), /exec/);
+  assert.strictEqual(w.store.SEEN_exec, '[]'); // not remembered, so it is tried again
+});
+
+test('one series failing does not stop the other', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' },
+    drive: { [LEAD]: [f('x', '9')] } }); // Exec folder lookup 404s
+  assert.throws(() => w.ctx.checkNotes(), /exec/);
+  assert.strictEqual(dispatches(w).length, 1);
+  assert.ok(dispatches(w)[0].opts.payload.includes('leadership'));
+});
+
+test('DRY_RUN (default) dispatches nothing and keeps the files unseen', () => {
+  const w = world({ props: { GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' },
+    drive: { [EXEC]: [f('b', '2')], [LEAD]: [] } });
+  w.ctx.checkNotes();
+  assert.strictEqual(dispatches(w).length, 0);
+  assert.strictEqual(w.store.SEEN_exec, '[]');
+});
+
+test('files not named like Gemini notes are ignored', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' },
+    drive: { [EXEC]: [{ id: 'r', name: 'YAC Exec - Recording' }], [LEAD]: [] } });
+  w.ctx.checkNotes();
+  assert.strictEqual(dispatches(w).length, 0);
+});
+
+test('missing token fails loudly', () => {
+  const w = world({ props: { DRY_RUN: 'false', SEEN_exec: '[]', SEEN_leadership: '[]' },
+    drive: { [EXEC]: [f('b', '2')], [LEAD]: [] } });
+  assert.throws(() => w.ctx.checkNotes(), /GITHUB_TOKEN/);
+});
+
+test('manifest asks only for the three narrow scopes', () => {
+  const m = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'src', 'appsscript.json'), 'utf8'));
+  assert.deepStrictEqual(m.oauthScopes.slice().sort(), [
+    'https://www.googleapis.com/auth/drive.metadata.readonly',
+    'https://www.googleapis.com/auth/script.external_request',
+    'https://www.googleapis.com/auth/script.scriptapp'
+  ]);
+});
+
+console.log(passed + ' passed.');
