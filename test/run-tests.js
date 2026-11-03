@@ -120,4 +120,15 @@ test('manifest asks only for the three narrow scopes', () => {
   ]);
 });
 
+test('a Drive error shows Google\'s reason in the failure', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' }, drive: {} });
+  w.ctx.UrlFetchApp.fetch = () => ({ getResponseCode: () => 403, getContentText: () => JSON.stringify({ error: { message: 'Google Drive API has not been used in project 1 before.' } }) });
+  assert.throws(() => w.ctx.checkNotes(), /HTTP 403: Google Drive API has not been used/);
+});
+
+test('manifest enables the Drive advanced service', () => {
+  const m = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'src', 'appsscript.json'), 'utf8'));
+  assert.strictEqual(m.dependencies.enabledAdvancedServices[0].serviceId, 'drive');
+});
+
 console.log(passed + ' passed.');

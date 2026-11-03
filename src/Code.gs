@@ -89,10 +89,22 @@ function listNotesIds_(folderId) {
     headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
     muteHttpExceptions: true
   });
-  if (res.getResponseCode() !== 200) throw new Error('Drive list returned HTTP ' + res.getResponseCode());
+  if (res.getResponseCode() !== 200) {
+    throw new Error('Drive list returned HTTP ' + res.getResponseCode() + googleReason_(res));
+  }
   return (JSON.parse(res.getContentText()).files || [])
     .filter(function (f) { return f.name.indexOf(NOTES_SUFFIX) !== -1; })
     .map(function (f) { return f.id; });
+}
+
+/** Google's own error reason (never note text), shortened, for the log and failure email. */
+function googleReason_(res) {
+  try {
+    var e = JSON.parse(res.getContentText()).error;
+    return ': ' + String(e.message || e.status || '').slice(0, 200);
+  } catch (err) {
+    return '';
+  }
 }
 
 /** Start the workflow live for one series. Throws unless GitHub answers 204. */
