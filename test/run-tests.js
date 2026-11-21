@@ -6,14 +6,19 @@ const assert = require('assert');
 
 const code = fs.readFileSync(path.join(__dirname, '..', 'src', 'Code.gs'), 'utf8');
 
-function world({ props = {}, drive = {}, githubStatus = 204, runs = [], runsStatus = 200 } = {}) {
-  const logs = [], fetches = [];
+function world({ props = {}, drive = {}, githubStatus = 204, runs = [], runsStatus = 200, triggers = ['checkNotes', 'checkMonitor'] } = {}) {
+  const logs = [], fetches = [], created = [];
+  triggers = triggers.slice();
   const store = Object.assign({}, props);
   const ctx = vm.createContext({
     console,
     Logger: { log: (m) => logs.push(m) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
-    ScriptApp: { getOAuthToken: () => 'oauth-token' },
+    ScriptApp: {
+      getOAuthToken: () => 'oauth-token',
+      getProjectTriggers: () => triggers.map((h) => ({ getHandlerFunction: () => h })),
+      newTrigger: (h) => ({ timeBased: () => ({ everyHours: () => ({ create: () => { triggers.push(h); created.push(h); } }), everyMinutes: () => ({ create: () => { triggers.push(h); created.push(h); } }) }) })
+    },
     Date,
     PropertiesService: { getScriptProperties: () => ({
       getProperty: (k) => (k in store ? store[k] : null),
@@ -29,7 +34,7 @@ function world({ props = {}, drive = {}, githubStatus = 204, runs = [], runsStat
     } }
   });
   vm.runInContext(code, ctx, { filename: 'Code.gs' });
-  return { ctx, logs, fetches, store };
+  return { ctx, logs, fetches, store, triggers, created };
 }
 
 const EXEC = '1ncmPKzuyvnPR4Ie7AbclhLjrXT3Yne0w';
@@ -197,6 +202,27 @@ test('setup makes both triggers and replaces old ones', () => {
   w.ctx.setup();
   assert.deepStrictEqual(deleted, ['checkNotes', 'checkMonitor']);
   assert.deepStrictEqual(made, ['checkNotes:m15', 'checkMonitor:h1']);
+});
+
+test('checkNotes adds the checkMonitor timer when a deploy brought it in, once', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' }, drive: { [EXEC]: [], [LEAD]: [] }, triggers: ['checkNotes'] });
+  w.ctx.checkNotes();
+  assert.deepStrictEqual(w.created, ['checkMonitor']);
+  w.ctx.checkNotes();
+  assert.deepStrictEqual(w.created, ['checkMonitor'], 'no second timer');
+});
+
+test('checkNotes leaves existing timers alone', () => {
+  const w = world({ props: { DRY_RUN: 'false', GITHUB_TOKEN: 't', SEEN_exec: '[]', SEEN_leadership: '[]' }, drive: { [EXEC]: [], [LEAD]: [] } });
+  w.ctx.checkNotes();
+  assert.deepStrictEqual(w.created, []);
+});
+
+test('the deploy workflow calls the shared deploy with this project', () => {
+  const wf = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'apps-script.yml'), 'utf8');
+  assert.ok(wf.includes('uses: ncssm-yac/yac-apps-script-deploy/.github/workflows/deploy.yml@main'));
+  assert.ok(/title: YAC Notes Trigger\n/.test(wf) && /src_dir: src\n/.test(wf) && /test_command: npm test\n/.test(wf));
+  assert.ok(!/create_if_missing: true/.test(wf), 'the live project must never be recreated');
 });
 
 console.log(passed + ' passed.');

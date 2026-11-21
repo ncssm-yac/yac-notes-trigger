@@ -19,12 +19,22 @@ GitHub starts only about half of the 6-hourly scheduled runs of Yakkety's ops mo
 
 GitHub's own schedule still runs; this only fills the gaps, so the monitor runs at least every ~7 hours.
 
+## Deploying (GitHub is the source of truth)
+
+Don't edit the code in the Apps Script editor. The **Apps Script** workflow (`.github/workflows/apps-script.yml`) calls YAC's shared deploy, `ncssm-yac/yac-apps-script-deploy`:
+
+- on a pull request: `npm test`;
+- on merge to `main` (or **Run workflow**): tests, `clasp push` to the **YAC Notes Trigger** project, then a check that the live code matches the repo;
+- every day: the same check. It goes red if someone edited the live code in the editor, or if the clasp sign-in (the `CLASPRC_JSON` organization secret; this repo is public so it can use it) stopped working. Renewal steps are in the shared repo's README.
+
+A new timer needs no editor step: `checkNotes` adds any missing one (`ensureTriggers_`) on its next 15-minute run. Script Properties (the token, `DRY_RUN`) are not code and are never touched by a deploy.
+
 ## Setup (one time, as ncssm.yac.yakkety@gmail.com)
 
 1. Make sure the account can see the Exec and Leadership Notes and Recordings folders (Viewer on the shared drive is enough).
-2. Create an Apps Script project. Paste `src/Code.gs` and, under Project Settings, show the manifest and paste `src/appsscript.json`. (Or use `clasp`: `clasp login`, `clasp create --type standalone`, `clasp push`. Not tested with this account yet.)
+2. Create an Apps Script project. Paste `src/Code.gs` and, under Project Settings, show the manifest and paste `src/appsscript.json`. (Done Oct 2026. Since Nov 21, 2026, later changes deploy from GitHub; see above.)
 3. Create a fine-grained GitHub token for **`ncssm-yac/yakkety` only** with **Actions: Read and write** (read lets `checkMonitor` see the monitor's last run). Add it as Script Property `GITHUB_TOKEN`. Never put it in the repo or chat.
-4. Run `setup` once (approve the consent screen). It creates both triggers: `checkNotes` every 15 minutes and `checkMonitor` every hour. **After pasting a new `Code.gs`, run `setup` again** so a newly added trigger exists.
+4. Run `setup` once (approve the consent screen). It creates both triggers: `checkNotes` every 15 minutes and `checkMonitor` every hour. Later deploys don't need `setup` again: `checkNotes` adds a missing timer itself.
 5. Run `checkNotes` once: it remembers the existing notes and dispatches nothing. `DRY_RUN` is on by default, so until you set the `DRY_RUN` Script Property to `false` the script only logs what it would do.
 6. Optionally run `testDispatch` to prove the token works (starts one harmless exec run).
 7. Set `DRY_RUN` to `false` to go live.
@@ -45,4 +55,4 @@ No packages to install. The tests stub Drive, GitHub, properties and the lock, a
 
 ## Changing it
 
-The IDs, repo and workflow name are at the top of `Code.gs`. Adding Biweekly would need a workflow that handles it first. A change to the scopes or to what is sent to GitHub should be reviewed by the owner.
+The IDs, repo and workflow name are at the top of `Code.gs`. A change goes live when its PR merges (see Deploying). Adding Biweekly would need a workflow that handles it first. A change to the scopes or to what is sent to GitHub should be reviewed by the owner.
