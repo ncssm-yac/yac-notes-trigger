@@ -7,11 +7,18 @@
  * Plain code, no model. It reads file NAMES and IDs only (never the notes),
  * and the only thing it sends out is the series name to GitHub.
  *
- * Entry points: checkNotes (the trigger), setup (run once), testDispatch.
+ * It also keeps Yakkety's ops monitor (monitor.yml) running: GitHub skips
+ * about half of its 6-hourly scheduled runs, so checkMonitor (hourly) starts
+ * one when the newest run is more than MONITOR_MAX_GAP_HOURS old. It reads
+ * only that workflow's run times and sends no inputs at all.
+ *
+ * Entry points: checkNotes and checkMonitor (the triggers), setup (run once),
+ * testDispatch.
  *
  * Script Properties (Project Settings; never commit values):
  *   GITHUB_TOKEN  fine-grained token: ncssm-yac/yakkety only, Actions: write
- *   DRY_RUN       anything but 'false' = log only, dispatch nothing (default)
+ *   DRY_RUN       anything but 'false' = log only, dispatch nothing (default);
+ *                 covers both triggers
  *   SEEN_exec / SEEN_leadership   written by the script (file IDs already seen)
  *
  * Why this is safe to run often: the workflow remembers every file it has
@@ -25,6 +32,11 @@ var WORKFLOW = 'meeting-notes-to-tasks.yml';
 var REF = 'main';
 var NOTES_SUFFIX = 'Notes by Gemini';
 var LIST_SIZE = 50; // newest notes files remembered per series
+var MONITOR_WORKFLOW = 'monitor.yml';
+// monitor.yml is scheduled every 6 hours; GitHub usually starts it a few
+// minutes late, so wait a little past that before starting one ourselves.
+// The monitor's own meta:monitor-alive check fails only past 12 hours.
+var MONITOR_MAX_GAP_HOURS = 6.5;
 
 // Folder IDs are not secrets (same as the relocator's ROUTES). Both are inside
 // the YAC Young Alumni Engagement shared drive.
@@ -109,29 +121,89 @@ function googleReason_(res) {
 
 /** Start the workflow live for one series. Throws unless GitHub answers 204. */
 function dispatch_(seriesKey, token) {
+  dispatchWorkflow_(WORKFLOW, { mode: 'live', series: seriesKey }, token);
+}
+
+function githubHeaders_(token) {
+  return {
+    Authorization: 'Bearer ' + token,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28'
+  };
+}
+
+/** workflow_dispatch on REF. `inputs` may be null. Throws unless GitHub answers 204. */
+function dispatchWorkflow_(workflow, inputs, token) {
   if (!token) throw new Error('GITHUB_TOKEN is not set');
-  var url = 'https://api.github.com/repos/' + REPO + '/actions/workflows/' + WORKFLOW + '/dispatches';
+  var url = 'https://api.github.com/repos/' + REPO + '/actions/workflows/' + workflow + '/dispatches';
+  var body = { ref: REF };
+  if (inputs) body.inputs = inputs;
   var res = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
-    headers: {
-      Authorization: 'Bearer ' + token,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28'
-    },
-    payload: JSON.stringify({ ref: REF, inputs: { mode: 'live', series: seriesKey } }),
+    headers: githubHeaders_(token),
+    payload: JSON.stringify(body),
     muteHttpExceptions: true
   });
   if (res.getResponseCode() !== 204) throw new Error('GitHub dispatch returned HTTP ' + res.getResponseCode());
 }
 
-/** Run once from the editor: replaces any old trigger with one every 15 minutes. */
+/**
+ * The second trigger (hourly): start Yakkety's monitor when GitHub has let it
+ * lapse. Does nothing while a monitor run is queued or running, or when the
+ * newest run started less than MONITOR_MAX_GAP_HOURS ago.
+ */
+function checkMonitor() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) { Logger.log('Another run is in progress; skipping.'); return; }
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var live = props.getProperty('DRY_RUN') === 'false';
+    var token = props.getProperty('GITHUB_TOKEN');
+    if (!token) throw new Error('GITHUB_TOKEN is not set');
+    var decision = monitorDecision_(latestMonitorRuns_(token), Date.now());
+    if (!decision.start) { Logger.log('monitor: ' + decision.why + '; nothing started.'); return; }
+    if (!live) { Logger.log('monitor: ' + decision.why + '. DRY_RUN is on: would start ' + MONITOR_WORKFLOW + '.'); return; }
+    dispatchWorkflow_(MONITOR_WORKFLOW, null, token);
+    Logger.log('monitor: ' + decision.why + '; started ' + MONITOR_WORKFLOW + '.');
+  } catch (e) {
+    // Throwing makes Apps Script email the failure to the account owner.
+    throw new Error('Monitor trigger failed -- ' + e.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** The newest runs of monitor.yml (any event, any status): [{ status, created_at }]. */
+function latestMonitorRuns_(token) {
+  var url = 'https://api.github.com/repos/' + REPO + '/actions/workflows/' + MONITOR_WORKFLOW + '/runs?per_page=5';
+  var res = UrlFetchApp.fetch(url, { headers: githubHeaders_(token), muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error('GitHub runs list returned HTTP ' + res.getResponseCode());
+  return (JSON.parse(res.getContentText()).workflow_runs || []).map(function (r) {
+    return { status: r.status, created_at: r.created_at };
+  });
+}
+
+/** Whether to start the monitor now: { start, why }. Pure, for the tests. */
+function monitorDecision_(runs, now) {
+  var active = runs.filter(function (r) { return r.status !== 'completed'; });
+  if (active.length) return { start: false, why: 'a run is already ' + active[0].status };
+  var newest = runs.reduce(function (t, r) { return Math.max(t, Date.parse(r.created_at) || 0); }, 0);
+  if (!newest) return { start: true, why: 'no earlier run found' };
+  var hours = (now - newest) / 3600000;
+  if (hours <= MONITOR_MAX_GAP_HOURS) return { start: false, why: 'last run ' + hours.toFixed(1) + 'h ago' };
+  return { start: true, why: 'last run ' + hours.toFixed(1) + 'h ago (over ' + MONITOR_MAX_GAP_HOURS + 'h)' };
+}
+
+/** Run once from the editor: replaces any old triggers with checkNotes every 15 minutes and checkMonitor every hour. */
 function setup() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'checkNotes') ScriptApp.deleteTrigger(t);
+    var h = t.getHandlerFunction();
+    if (h === 'checkNotes' || h === 'checkMonitor') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('checkNotes').timeBased().everyMinutes(15).create();
-  Logger.log('Trigger set: checkNotes every 15 minutes. DRY_RUN stays on until you set it to false.');
+  ScriptApp.newTrigger('checkMonitor').timeBased().everyHours(1).create();
+  Logger.log('Triggers set: checkNotes every 15 minutes, checkMonitor every hour. DRY_RUN stays on until you set it to false.');
 }
 
 /** Check the token and the workflow from the editor (starts a real run for exec; harmless if nothing is new). */
