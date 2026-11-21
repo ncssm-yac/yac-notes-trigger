@@ -11,7 +11,7 @@ name: Apps Script
 # - Every day: drift check. Fails if the live code differs from the repo or
 #   the clasp sign-in has stopped working.
 #
-# Secret: CLASPRC_JSON, this repo's own secret (see the shared repo's README).
+# Secret: CLASPRC_JSON, the organization secret (see the shared repo's README).
 on:
   push:
     branches: [main]
