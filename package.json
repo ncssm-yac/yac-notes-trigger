@@ -2,6 +2,6 @@
   "name": "yac-notes-trigger",
   "version": "0.1.0",
   "private": true,
-  "description": "Apps Script that starts Yakkety's meeting-notes-to-tasks workflow when a Gemini notes Doc lands in a YAC series folder.",
+  "description": "Apps Script that starts Yakkety's meeting-notes-to-tasks workflow when a Gemini notes Doc lands in a YAC series folder, and starts the ops monitor when GitHub skips its schedule.",
   "scripts": { "test": "node test/run-tests.js" }
 }

@@ -8,12 +8,23 @@ A small Google Apps Script that starts Yakkety's **Meeting notes to tasks (per f
 - The notes already arrive late on purpose: the relocator files a meeting only after 3 hours of quiet, which is how long Gemini takes. So this fires at the earliest moment finished notes exist.
 - Safe to repeat: the workflow remembers every file it has processed, so an extra dispatch costs nothing. Its own twice-a-day schedule stays as a backup.
 
+## Monitor keep-alive (`checkMonitor`)
+
+GitHub starts only about half of the 6-hourly scheduled runs of Yakkety's ops monitor (`monitor.yml`), so its `meta:monitor-alive` check (12-hour limit) kept failing (yakkety #179). A second trigger, **`checkMonitor`, runs every hour**:
+
+- It reads the newest `monitor.yml` runs (times and status only).
+- If one is queued or running, or the newest started within **6.5 hours**, it does nothing.
+- Otherwise it starts `monitor.yml` on `main`, with no inputs. That is all it sends.
+- Same token, same `DRY_RUN` switch, same script lock as `checkNotes`. A failure throws, so Apps Script emails it.
+
+GitHub's own schedule still runs; this only fills the gaps, so the monitor runs at least every ~7 hours.
+
 ## Setup (one time, as ncssm.yac.yakkety@gmail.com)
 
 1. Make sure the account can see the Exec and Leadership Notes and Recordings folders (Viewer on the shared drive is enough).
 2. Create an Apps Script project. Paste `src/Code.gs` and, under Project Settings, show the manifest and paste `src/appsscript.json`. (Or use `clasp`: `clasp login`, `clasp create --type standalone`, `clasp push`. Not tested with this account yet.)
-3. Create a fine-grained GitHub token for **`ncssm-yac/yakkety` only** with **Actions: Read and write**. Add it as Script Property `GITHUB_TOKEN`. Never put it in the repo or chat.
-4. Run `setup` once (approve the consent screen). It creates the 15-minute trigger.
+3. Create a fine-grained GitHub token for **`ncssm-yac/yakkety` only** with **Actions: Read and write** (read lets `checkMonitor` see the monitor's last run). Add it as Script Property `GITHUB_TOKEN`. Never put it in the repo or chat.
+4. Run `setup` once (approve the consent screen). It creates both triggers: `checkNotes` every 15 minutes and `checkMonitor` every hour. **After pasting a new `Code.gs`, run `setup` again** so a newly added trigger exists.
 5. Run `checkNotes` once: it remembers the existing notes and dispatches nothing. `DRY_RUN` is on by default, so until you set the `DRY_RUN` Script Property to `false` the script only logs what it would do.
 6. Optionally run `testDispatch` to prove the token works (starts one harmless exec run).
 7. Set `DRY_RUN` to `false` to go live.
@@ -30,7 +41,7 @@ If `checkNotes` fails with HTTP 403 from Drive, the Drive API isn't enabled for 
 npm test
 ```
 
-No packages to install. The tests stub Drive, GitHub, properties and the lock, and cover: first run baseline, one dispatch per series, series-name-only payload, retry after a failed dispatch, one series failing without blocking the other, DRY_RUN, ignoring recordings, a missing token, and the manifest scopes.
+No packages to install. The tests stub Drive, GitHub, properties and the lock, and cover: first run baseline, one dispatch per series, series-name-only payload, retry after a failed dispatch, one series failing without blocking the other, DRY_RUN, ignoring recordings, a missing token, the manifest scopes, and `checkMonitor` (starts only after 6.5 hours with nothing running, sends no inputs, DRY_RUN, errors throw, reads nothing else) and `setup` making both triggers.
 
 ## Changing it
 
