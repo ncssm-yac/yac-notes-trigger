@@ -25,7 +25,7 @@ Don't edit the code in the Apps Script editor. The **Apps Script** workflow (`.g
 
 - on a pull request: `npm test`;
 - on merge to `main` (or **Run workflow**): tests, `clasp push` to the **YAC Notes Trigger** project, then a check that the live code matches the repo;
-- every day: the same check. It goes red if someone edited the live code in the editor, or if the clasp sign-in (the `CLASPRC_JSON` organization secret) stopped working. Renewal steps are in the shared repo's README.
+- every day: the same check. It goes red if someone edited the live code in the editor, or if the clasp sign-in (this repo's `CLASPRC_JSON` secret, the same value as in `yac-birthdays`) stopped working. Renewal steps are in the shared repo's README.
 
 A new timer needs no editor step: `checkNotes` adds any missing one (`ensureTriggers_`) on its next 15-minute run. Script Properties (the token, `DRY_RUN`) are not code and are never touched by a deploy.
 
