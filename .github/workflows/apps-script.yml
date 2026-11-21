@@ -1,0 +1,36 @@
+name: Apps Script
+
+# Keeps the YAC Notes Trigger Apps Script (src/) in step with this repo,
+# through YAC's shared deploy (ncssm-yac/yac-apps-script-deploy). GitHub is
+# the only source of truth: nobody pastes code into the editor.
+#
+# - Pull request: tests only.
+# - Merge to main touching src/ (or Run workflow): tests, `clasp push`, then
+#   the drift check. A new trigger function needs no editor step: checkNotes
+#   adds its timer on its next 15-minute run (ensureTriggers_).
+# - Every day: drift check. Fails if the live code differs from the repo or
+#   the clasp sign-in has stopped working.
+#
+# Secret: CLASPRC_JSON (organization secret; see the shared repo's README).
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'test/**', '.github/workflows/apps-script.yml']
+  pull_request:
+    paths: ['src/**', 'test/**', '.github/workflows/apps-script.yml']
+  schedule:
+    - cron: '29 15 * * *' # daily drift check; any time of day is fine
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: ncssm-yac/yac-apps-script-deploy/.github/workflows/deploy.yml@main
+    with:
+      title: YAC Notes Trigger
+      src_dir: src
+      test_command: npm test
+    secrets:
+      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}

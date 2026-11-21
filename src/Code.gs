@@ -13,7 +13,8 @@
  * only that workflow's run times and sends no inputs at all.
  *
  * Entry points: checkNotes and checkMonitor (the triggers), setup (run once),
- * testDispatch.
+ * testDispatch. Deployed by GitHub (.github/workflows/apps-script.yml, through
+ * ncssm-yac/yac-apps-script-deploy); don't edit it in the Apps Script editor.
  *
  * Script Properties (Project Settings; never commit values):
  *   GITHUB_TOKEN  fine-grained token: ncssm-yac/yakkety only, Actions: write
@@ -50,6 +51,7 @@ function checkNotes() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) { Logger.log('Another run is in progress; skipping.'); return; }
   try {
+    ensureTriggers_();
     var props = PropertiesService.getScriptProperties();
     var live = props.getProperty('DRY_RUN') === 'false';
     var errors = [];
@@ -193,6 +195,22 @@ function monitorDecision_(runs, now) {
   var hours = (now - newest) / 3600000;
   if (hours <= MONITOR_MAX_GAP_HOURS) return { start: false, why: 'last run ' + hours.toFixed(1) + 'h ago' };
   return { start: true, why: 'last run ' + hours.toFixed(1) + 'h ago (over ' + MONITOR_MAX_GAP_HOURS + 'h)' };
+}
+
+/**
+ * Adds any of this script's timers that are missing, so a deploy (clasp push,
+ * no one in the editor) is all a new trigger needs: the 15-minute checkNotes
+ * run creates checkMonitor's hourly timer the first time it runs new code.
+ * Never deletes or duplicates a timer. checkNotes itself must already exist
+ * (setup, once), since only a running trigger can call this.
+ */
+function ensureTriggers_() {
+  var have = {};
+  ScriptApp.getProjectTriggers().forEach(function (t) { have[t.getHandlerFunction()] = true; });
+  if (!have.checkMonitor) {
+    ScriptApp.newTrigger('checkMonitor').timeBased().everyHours(1).create();
+    Logger.log('Added the missing checkMonitor trigger (every hour).');
+  }
 }
 
 /** Run once from the editor: replaces any old triggers with checkNotes every 15 minutes and checkMonitor every hour. */
